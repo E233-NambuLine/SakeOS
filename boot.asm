@@ -2,15 +2,17 @@
 [bits 16]
 
 section .bss
-lfb_addr db 8
+mem_pos resb 2
+readpos: resb 1
+sectors: resb 1
 
 section .text
 start:
-mov ax, 4F01h
-int 0x10
-mov eax, [lfb_addr]
+in al, 0x92
+or al, 0b00000010
+out 0x92, al
 mov ax, 0x4F02
-mov bx, 0x4118      ; 800x600x32bpp (LFB)
+mov bx, 0x411F
 int 0x10
 
     cli
@@ -20,128 +22,61 @@ int 0x10
     mov ss, ax
     mov sp, 0x7C00
 
-mov al, 'O'
-mov cx, 1
-call vram_char_draw
-jmp pm
+mov byte [readpos], 1        ; LBA = 1 から
+mov word [mem_pos], 0x8000   ; 読み込み先
+mov byte [sectors], 3        ; 読むセクタ数 = 3
 
-gdt_start:
-    dq 0x0000000000000000      ; ヌル
+read_loop:
+    mov dx, 0x1F2            ; Sector Count
+    mov al, 0x01
+    out dx, al
 
-   ; コードセグメント: base=0, limit=0xFFFFF, 4GB, exec/read
-    dq 0x00CF9A000000FFFF
+    mov dx, 0x1F3            ; LBA low
+    mov al, [readpos]
+    out dx, al
 
-    ; データセグメント: base=0, limit=0xFFFFF, 4GB, read/write
-    dq 0x00CF92000000FFFF
-gdt_end:
+    mov dx, 0x1F4            ; LBA mid
+    mov al, 0x00
+    out dx, al
 
-gdt_descriptor:
-    dw gdt_end - gdt_start - 1
-    dd gdt_start
+    mov dx, 0x1F5            ; LBA high
+    mov al, 0x00
+    out dx, al
 
-pm:
-mov eax, cr0
-or eax, 1
-mov cr0, eax
-lgdt [gdt_descriptor]
-jmp dword 0x08:pm_entry
-[bits 32]
-pm_entry:
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov fs, ax
-    mov gs, ax
-mov al, '!'
-mov bx, 0x0F
-mov cx, 0x10
+    mov dx, 0x1F6            ; Drive/Head
+    mov al, 0xE0             ; LBA, master
+    out dx, al
 
-;initialize
-;call all_disk_read
+    mov dx, 0x1F7
+    mov al, 0x20             ; READ SECTORS
+    out dx, al
 
-mov dword [0xB800], 0xFFFFFFFFFFFFFFFFFFFFF
-cli
-xor eax, eax
-;mov 
-
-jmp 0x10000:0000
-jc disk_err
-
-disk_err:
-hlt
-;ret
-
-;call vram_char_draw
-[bits 16]
-ata_write:
-
-ata_read:
-mov dx, 0x1F6
-mov al, 0xE0
-out dx, al
-
-mov dx, 0x1F2       ; sector count
-mov al, 1
-out dx, al
-
-mov dx, 0x1F3       ; LBA low
-mov al, 0x01
-out dx, al
-
-mov dx, 0x1F4       ; LBA mid
-mov al, 0x00
-out dx, al
-
-mov dx, 0x1F5       ; LBA high
-mov al, 0x00
-out dx, al
-
-mov dx, 0x1F6       ; device/head (上で書いたやつに LBA[24..27] 足す)
-mov al, 0xE0 ; (<LBA3> & 0x0F)
-out dx, al
-
-mov dx, 0x1F7
-mov al, 0x20        ; READ SECTORS (with retry)
-out dx, al
-
+    mov dx, 0x1F7
 .wait:
-    in al, dx       ; dx = 0x1F7 のまま
-    test al, 0x80   ; BSY
+    in  al, dx
+    test al, 0x80            ; BSY?
     jnz .wait
-    test al, 0x08   ; DRQ
-    jz .wait
+    test al, 0x08            ; DRQ?
+    jz  .wait
 
-mov dx, 0x1F0
-mov cx, 256
-.read_loop:
-    in ax, dx
-    mov [di], ax    ; di にバッファ
-    add di, 2
-    loop .read_loop
+    mov dx, 0x1F0
+    mov di, [mem_pos]
+    mov cx, 256
+    rep insw                  ; 1セクタ分読む
 
-vram_char_draw:
-    push ax
-    push bx
-    push cx
-    push es
-    push di
+    ; 次のセクタへ
+    inc byte [readpos]        ; LBA++
+    add word [mem_pos], 512   ; バッファ +512
 
-    mov ax, 0xB800
-    mov es, ax
+    dec byte [sectors]
+    jnz read_loop
+jmp word 0x0000:0x8000
+jc jmp_err
 
-    mov di, cx
-    shl di, 1        ; 文字番号 → バイトオフセット
-
-    mov [es:di], al
-    mov [es:di+1], bl
-
-    pop di
-    pop es
-    pop cx
-    pop bx
-    pop ax
-    ret
+jmp_err:
+mov ax, 0x000E
+cli
+hlt
 
 times 510-($-$$) db 0
 dw 0xAA55
