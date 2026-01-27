@@ -11,9 +11,6 @@ start:
 in al, 0x92
 or al, 0b00000010
 out 0x92, al
-mov ax, 0x4F02
-mov bx, 0x411F
-int 0x10
 
     cli
     xor ax, ax
