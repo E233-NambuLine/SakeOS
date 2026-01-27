@@ -1,15 +1,69 @@
 [org 0x8000]
 [bits 16]
 
+section .bss
+sectors: resb 1
+mem_pos: resb 3
+readpos: resb 2
+vram_seg: resb 3
+vram_off: resb 4
+
+section .text
 start:
+mov ax, 0x0000
+mov es, ax
+mov di, 0x7E01
+mov ax, 0x4F00
+int 0x10
+
+xor ax, ax
+
+cmp ax, 0x004F
+jne vbe_inop
+
+mov bx, [es:di+0x0E] ; offset
+mov cx, [es:di+0x10] ; segment
+mov [vram_seg],  cx
+mov [vram_off], bx
+
+push ax
+mov ax, [vram_seg]
+mov es, ax
+pop ax
+
+push bx
+
+mov bx, [vram_off]
+
+; モード番号一覧を読む
+next_mode:
+    mov cx, [es:bx]
+    cmp cx, 0xFFFF
+    je end
+    ; ここで cx がモード番号
+    add bx, 2
+    jmp next_mode
+
+end:
+mov es, ax
+mov di, 0x7F01
+mov ax, 0x4F01
+int 0x10
+
+
+
+vbe_inop:
+hlt
+
+forpm:
     cli
-    lgdt [gdt_descriptor]     ; 1. GDT を先にロード
+    lgdt [gdt_descriptor]     ; ① GDT を先にロード
 
     mov eax, cr0
-    or eax, 1                 ; 2. PE=1
+    or eax, 1                 ; ② PE=1
     mov cr0, eax
 
-    jmp 0x08:pm_entry         ; 3. far jump で PM へ
+    jmp 0x08:pm_entry         ; ③ far jump で PM へ
 
 ; -------------------------
 ; GDT
@@ -34,10 +88,12 @@ pm_entry:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov esp, 0x90000           ; スタック
+    mov esp, 0x90000           ; 適当なスタック
     ; ここから32bitコード
 
 global isr_common
+call init_idt
+jmp start32
 
 isr_common:
 cli
@@ -94,7 +150,60 @@ start32:
     mov gs, ax
 
     ;mov 
-ret
+;ret
+
+call krnlread
+
+krnlread:
+mov dx, 0x1F2
+mov al, 0x01
+out dx, al
+
+mov dx, 0x1F3
+mov al, [readpos]
+out dx, al
+
+shr byte [readpos], 1
+
+mov dx, 0x1F4
+mov al, [readpos]
+out dx, al
+
+shr byte [readpos], 1
+
+mov dx, 0x1F5
+mov al, [readpos]
+out dx, al
+
+mov dx, 0x1F6
+mov al, [readpos]
+out dx, al
+
+shr byte [readpos], 8
+
+mov dx, 0x1F7
+mov al, [readpos]
+out dx, al
+
+.wait:
+in al, dx
+test al, 0x80
+jnz .wait
+in al, dx
+test al, 0x08
+jnz .wait
+
+mov dx, 0x1F0
+mov di, [mem_pos]
+mov cx, 256
+
+rep insw
+
+inc byte [readpos]
+add word [mem_pos], 512
+
+dec byte [sectors]
+jnz krnlread
 
 jmp 0x10000
 jc disk_err
